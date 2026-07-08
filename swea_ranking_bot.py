@@ -6,6 +6,8 @@ from playwright.sync_api import sync_playwright
 
 SUBMIT_STATUS_URL = "https://swexpertacademy.com/main/talk/solvingClub/problemBoxSubmitStatusList.do"
 DEFAULT_AUTH_FILE = Path(__file__).parent / "swea_auth.json"
+PAGE_SIZE = 30
+MAX_PAGES = 50
 
 
 def save_login_session(auth_path: Path) -> None:
@@ -20,25 +22,19 @@ def save_login_session(auth_path: Path) -> None:
     print(f"로그인 세션 저장됨: {auth_path}")
 
 
-def collect_pass_counts(solveclub_id: str, prob_box_id: str, auth_path: Path, nickname_filter: str | None = None) -> dict[str, set[str]]:
+def collect_pass_counts(solveclub_id: str, prob_box_id: str, auth_path: Path) -> dict[str, set[str]]:
     passed = defaultdict(set)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(storage_state=str(auth_path))
         page = context.new_page()
+        page.set_default_timeout(15000)
 
-        left_page = 1
-        while True:
+        for left_page in range(1, MAX_PAGES + 1):
             url = f"{SUBMIT_STATUS_URL}?solveclubId={solveclub_id}&probBoxId={prob_box_id}&leftPage={left_page}"
             page.goto(url)
-
-            if nickname_filter:
-                page.fill("input[placeholder='닉네임']", nickname_filter)
-                page.press("input[placeholder='닉네임']", "Enter")
-                page.wait_for_load_state("networkidle")
-
-            page.select_option("select", "30")
+            page.select_option("select", str(PAGE_SIZE))
             page.wait_for_load_state("networkidle")
 
             rows = page.locator(".box-list-inner > .inner_list:has(.inner_list_left .name)")
@@ -62,10 +58,8 @@ def collect_pass_counts(solveclub_id: str, prob_box_id: str, auth_path: Path, ni
                     if result_text.startswith("Pass"):
                         passed[nickname].add(problem_no)
 
-            next_link = page.locator("a:has-text('Next')")
-            if not next_link.is_visible() or "disabled" in (next_link.get_attribute("class") or ""):
+            if row_count < PAGE_SIZE:
                 break
-            left_page += 1
 
         browser.close()
 
@@ -73,7 +67,7 @@ def collect_pass_counts(solveclub_id: str, prob_box_id: str, auth_path: Path, ni
 
 
 def format_ranking_table(passed: dict[str, set[str]], top_n: int = 3) -> str:
-    ranking = sorted(passed.items(), key=lambda kv: -len(kv[1]))
+    ranking = sorted(passed.items(), key=lambda kv: (-len(kv[1]), kv[0]))
     medals = ["🥇 1위", "🥈 2위", "🥉 3위"]
 
     lines = [
@@ -83,16 +77,14 @@ def format_ranking_table(passed: dict[str, set[str]], top_n: int = 3) -> str:
 
     rank = 0
     prev_count = None
-    shown = 0
     for nickname, problems in ranking:
-        if shown >= top_n and len(problems) != prev_count:
-            break
         if len(problems) != prev_count:
             rank += 1
+        if rank > top_n:
+            break
         prev_count = len(problems)
         label = medals[rank - 1] if rank <= len(medals) else f"{rank}위"
         lines.append(f"| **{label}** | {nickname} | {len(problems)} |")
-        shown += 1
 
     return "\n".join(lines)
 
@@ -115,5 +107,9 @@ if __name__ == "__main__":
             raise SystemExit("--solveclub-id 와 --prob-box-id 를 지정해야 합니다")
         if not auth_path.exists():
             raise SystemExit(f"{auth_path} 가 없습니다. 먼저 --login 으로 로그인 세션을 저장하세요.")
-        passed = collect_pass_counts(args.solveclub_id, args.prob_box_id, auth_path, args.nickname)
-        print(format_ranking_table(passed))
+        passed = collect_pass_counts(args.solveclub_id, args.prob_box_id, auth_path)
+        if args.nickname:
+            count = len(passed.get(args.nickname, set()))
+            print(f"{args.nickname}: Pass {count}개")
+        else:
+            print(format_ranking_table(passed))
