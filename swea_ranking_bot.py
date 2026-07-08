@@ -41,7 +41,7 @@ def collect_pass_counts(solveclub_id: str, prob_box_id: str, auth_path: Path, ni
             page.select_option("select", "30")
             page.wait_for_load_state("networkidle")
 
-            rows = page.locator(".box-list-inner > .inner_list")
+            rows = page.locator(".box-list-inner > .inner_list:has(.inner_list_left .name)")
             row_count = rows.count()
             if row_count == 0:
                 break
