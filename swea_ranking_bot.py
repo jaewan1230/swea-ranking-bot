@@ -1,8 +1,12 @@
 import argparse
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+
+if sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
 
 SUBMIT_STATUS_URL = "https://swexpertacademy.com/main/talk/solvingClub/problemBoxSubmitStatusList.do"
 DEFAULT_AUTH_FILE = Path(__file__).parent / "swea_auth.json"
