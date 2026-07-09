@@ -12,6 +12,7 @@ from playwright.sync_api import sync_playwright
 if sys.stdout and sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
+
 def _app_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
@@ -34,7 +35,10 @@ def load_roster(roster_path: Path) -> dict[str, str]:
     if not roster_path.exists():
         return {}
     with roster_path.open(encoding="utf-8") as f:
-        return json.load(f)
+        roster = json.load(f)
+    if not isinstance(roster, dict):
+        raise ValueError("roster.json은 닉네임과 지역을 담은 JSON 객체여야 합니다.")
+    return {str(nickname): str(region) for nickname, region in roster.items() if region}
 
 
 def parse_swea_ids(url: str) -> tuple[str, str]:
@@ -120,10 +124,8 @@ def format_ranking_table(passed: dict[str, set[str]], roster: dict[str, str] | N
     roster = roster or {}
     ranking = sorted(passed.items(), key=lambda kv: (-len(kv[1]), kv[0]))
     medals = ["🥇 1위", "🥈 2위", "🥉 3위"]
-    header = "이름 (지역)" if roster else "이름"
-
     lines = [
-        f"| **순위** | **{header}** | **푼 문제 수** |",
+        "| **순위** | **이름 (지역)** | **푼 문제 수** |",
         "|:-----|:---------|---------:|",
     ]
 
@@ -136,10 +138,8 @@ def format_ranking_table(passed: dict[str, set[str]], roster: dict[str, str] | N
             break
         prev_count = len(problems)
         label = medals[rank - 1] if rank <= len(medals) else f"{rank}위"
-        display_name = clean_display_name(nickname)
         region = roster.get(nickname)
-        if region:
-            display_name = f"{display_name} ({region})"
+        display_name = f"{clean_display_name(nickname)} ({region})" if region else nickname
         lines.append(f"| **{label}** | {display_name} | {len(problems)} |")
 
     return "\n".join(lines)
@@ -152,7 +152,7 @@ if __name__ == "__main__":
     parser.add_argument("--prob-box-id", help="집계할 Problem Box ID")
     parser.add_argument("--nickname", help="특정 닉네임만 집계 (테스트용)")
     parser.add_argument("--auth-file", default=str(DEFAULT_AUTH_FILE))
-    parser.add_argument("--roster-file", default=str(DEFAULT_ROSTER_FILE), help="닉네임→지역 매핑 JSON (선택, 없으면 이름만 표시)")
+    parser.add_argument("--roster-file", default=str(DEFAULT_ROSTER_FILE), help="닉네임→지역 매핑 JSON (선택, 매칭 없으면 원본 닉네임 표시)")
     args = parser.parse_args()
 
     auth_path = Path(args.auth_file)

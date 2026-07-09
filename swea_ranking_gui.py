@@ -2,9 +2,7 @@ import json
 import os
 import sys
 import threading
-import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, scrolledtext, ttk
 
 
 def configure_playwright_browsers() -> None:
@@ -17,7 +15,27 @@ def configure_playwright_browsers() -> None:
         os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(bundled_browsers))
 
 
+def configure_tk_libraries() -> None:
+    candidates = []
+    if getattr(sys, "frozen", False):
+        bundled_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        candidates.append((bundled_root / "_tcl_data", bundled_root / "_tk_data"))
+    else:
+        prefix = Path(sys.prefix)
+        candidates.append((prefix / "Library" / "lib" / "tcl8.6", prefix / "Library" / "lib" / "tk8.6"))
+
+    for tcl_dir, tk_dir in candidates:
+        if (tcl_dir / "init.tcl").exists() and (tk_dir / "tk.tcl").exists():
+            os.environ.setdefault("TCL_LIBRARY", str(tcl_dir))
+            os.environ.setdefault("TK_LIBRARY", str(tk_dir))
+            return
+
+
+configure_tk_libraries()
 configure_playwright_browsers()
+
+import tkinter as tk
+from tkinter import messagebox, scrolledtext, ttk
 
 from playwright.sync_api import sync_playwright
 
@@ -28,6 +46,20 @@ APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 AUTH_FILE = APP_DIR / "swea_auth.json"
 CONFIG_FILE = APP_DIR / "config.json"
 LOGIN_URL = "https://swexpertacademy.com/main/main.do"
+DEFAULT_TITLE = "M월 D일 ~ M월 D일 알고리즘 랭킹"
+DEFAULT_INTRO = "이번주의 15기 실습코치 알고리즘 풀이 주간 랭킹을 발표합니다!!! :thumbup:"
+DEFAULT_OUTRO = "이번주도 화이팅해보아요 :wagom:"
+OLD_DEFAULT_TITLE = "알고리즘 랭킹"
+OLD_DEFAULT_INTRO = "이번주의 알고리즘 풀이 주간 랭킹을 발표합니다!!!"
+OLD_DEFAULT_OUTRO = "이번주도 화이팅해보아요."
+ROSTER_EXAMPLE = {
+    "김싸피_1234567": "구미",
+    "이싸피_2345678": "서울",
+    "박싸피_3456789": "광주",
+}
+
+
+ROSTER_FILE = DEFAULT_ROSTER_FILE
 
 
 class SweaRankingApp(tk.Tk):
@@ -42,9 +74,9 @@ class SweaRankingApp(tk.Tk):
         self.solveclub_id_var = tk.StringVar(value=config.get("solveclub_id", ""))
         self.prob_box_id_var = tk.StringVar(value=config.get("prob_box_id", ""))
         self.top_n_var = tk.StringVar(value=str(config.get("top_n", 3)))
-        self.title_var = tk.StringVar(value=config.get("title", "알고리즘 랭킹"))
-        self.intro_var = tk.StringVar(value=config.get("intro", "이번주의 알고리즘 풀이 주간 랭킹을 발표합니다!!!"))
-        self.outro_var = tk.StringVar(value=config.get("outro", "이번주도 화이팅해보아요."))
+        self.title_var = tk.StringVar(value=self._config_value(config, "title", DEFAULT_TITLE, OLD_DEFAULT_TITLE))
+        self.intro_var = tk.StringVar(value=self._config_value(config, "intro", DEFAULT_INTRO, OLD_DEFAULT_INTRO))
+        self.outro_var = tk.StringVar(value=self._config_value(config, "outro", DEFAULT_OUTRO, OLD_DEFAULT_OUTRO))
         self.status_var = tk.StringVar(value=self._initial_status())
 
         self._build_ui()
@@ -113,6 +145,8 @@ class SweaRankingApp(tk.Tk):
         self.copy_button.grid(row=0, column=1, padx=(0, 8))
         self.clear_button = ttk.Button(actions_frame, text="결과 초기화", command=self.clear_result)
         self.clear_button.grid(row=0, column=2)
+        self.roster_button = ttk.Button(actions_frame, text="명단/지역 파일 열기", command=self.open_roster_file)
+        self.roster_button.grid(row=0, column=3, padx=(8, 0))
 
         result_frame = ttk.LabelFrame(main, text="Mattermost에 붙여넣을 Markdown")
         result_frame.grid(row=7, column=0, sticky="nsew")
@@ -155,13 +189,13 @@ class SweaRankingApp(tk.Tk):
                 page = context.new_page()
                 page.goto(LOGIN_URL)
 
-                self._set_status_threadsafe("열린 브라우저에서 SWEA에 로그인한 뒤 확인을 눌러주세요.")
+                self._set_status_threadsafe("브라우저로 돌아가 SWEA 로그인을 완료한 뒤 이 창의 [확인]을 눌러주세요.")
                 if not self._ask_login_done():
                     self._set_status_threadsafe("로그인 세션 저장을 취소했습니다.")
                     return
 
                 context.storage_state(path=str(AUTH_FILE))
-                self._set_status_threadsafe(f"로그인 세션을 저장했습니다: {AUTH_FILE}")
+                self._set_status_threadsafe("로그인 세션을 저장했습니다.")
         except Exception as exc:
             self._show_error_threadsafe("로그인 실패", self._friendly_error(exc))
             self._set_status_threadsafe("로그인에 실패했습니다.")
@@ -180,7 +214,11 @@ class SweaRankingApp(tk.Tk):
         def ask() -> None:
             result["ok"] = messagebox.askokcancel(
                 "SWEA 로그인",
-                "열린 브라우저에서 SWEA에 로그인한 뒤 [확인]을 누르면 세션을 저장합니다.",
+                "1. 이 창을 닫지 말고, 열린 브라우저로 돌아가\n"
+                "   SWEA 로그인을 먼저 완료해주세요.\n"
+                "2. SWEA 로그인이 완료되면 이 창으로 돌아와\n"
+                "   [확인]을 눌러주세요.\n\n"
+                "[확인]을 누르는 순간 현재 브라우저 로그인 세션을 저장합니다.",
             )
             event.set()
 
@@ -269,20 +307,49 @@ class SweaRankingApp(tk.Tk):
         self.result_text.delete("1.0", "end")
         self.status_var.set("결과를 초기화했습니다.")
 
+    def open_roster_file(self) -> None:
+        try:
+            roster_path = self._ensure_roster_file()
+            if hasattr(os, "startfile"):
+                os.startfile(str(roster_path))
+                self.status_var.set("명단/지역 파일을 열었습니다.")
+            else:
+                messagebox.showinfo("명단/지역 파일", f"이 파일을 편집해주세요:\n{roster_path}")
+        except Exception as exc:
+            messagebox.showerror("명단/지역 파일 열기 실패", self._friendly_error(exc))
+
     def _build_mattermost_message(self, title: str, intro: str, table: str, outro: str) -> str:
-        parts = []
+        header_lines = []
+        body_parts = []
+
         if title.strip():
-            parts.append(f"# {title.strip()}")
+            header_lines.append(self._format_title(title))
         if intro.strip():
-            parts.append(intro.strip())
-        parts.append(table)
+            header_lines.append(self._format_intro(intro))
+        if header_lines:
+            body_parts.append("\n".join(header_lines))
+
+        body_parts.append(table)
         if outro.strip():
-            parts.append(outro.strip())
-        return "\n\n".join(parts)
+            body_parts.append(outro.strip())
+        body_parts.append("---")
+        return "\n\n".join(body_parts)
+
+    def _format_title(self, title: str) -> str:
+        title = title.strip()
+        if title.startswith("#"):
+            return title
+        return f"### :white_heart: {title} :white_heart:"
+
+    def _format_intro(self, intro: str) -> str:
+        intro = intro.strip()
+        if intro.startswith("#"):
+            return intro
+        return f"##### {intro}"
 
     def _set_busy(self, busy: bool) -> None:
         state = "disabled" if busy else "normal"
-        for button in (self.login_button, self.parse_button, self.collect_button):
+        for button in (self.login_button, self.parse_button, self.collect_button, self.roster_button):
             button.configure(state=state)
 
     def _set_busy_threadsafe(self, busy: bool) -> None:
@@ -314,7 +381,7 @@ class SweaRankingApp(tk.Tk):
 
     def _initial_status(self) -> str:
         if AUTH_FILE.exists():
-            return f"로그인 세션 파일이 있습니다: {AUTH_FILE}"
+            return "로그인 세션 파일이 있습니다. 필요하면 세션을 갱신할 수 있습니다."
         return "로그인 세션이 없습니다. 먼저 SWEA 로그인을 진행해주세요."
 
     def _load_config(self) -> dict:
@@ -323,8 +390,30 @@ class SweaRankingApp(tk.Tk):
         except (FileNotFoundError, json.JSONDecodeError):
             return {}
 
+    def _config_value(self, config: dict, key: str, default: str, old_default: str) -> str:
+        value = config.get(key, default)
+        if value == old_default:
+            return default
+        return value
+
     def _load_roster(self) -> dict[str, str]:
-        return load_roster(DEFAULT_ROSTER_FILE)
+        try:
+            return load_roster(ROSTER_FILE)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"명단/지역 파일 JSON 문법을 확인해주세요:\n{ROSTER_FILE}\n\n{exc}") from exc
+
+    def _ensure_roster_file(self) -> Path:
+        ROSTER_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if not ROSTER_FILE.exists():
+            ROSTER_FILE.write_text(
+                json.dumps(ROSTER_EXAMPLE, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            messagebox.showinfo(
+                "명단/지역 파일 생성",
+                "예시 roster.json을 만들었습니다.\n닉네임과 지역을 수정한 뒤 저장해주세요.",
+            )
+        return ROSTER_FILE
 
     def _save_config(self) -> None:
         APP_DIR.mkdir(parents=True, exist_ok=True)
