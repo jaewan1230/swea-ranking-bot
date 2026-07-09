@@ -12,9 +12,15 @@ from playwright.sync_api import sync_playwright
 if sys.stdout and sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
+def _app_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).parent
+
+
 SUBMIT_STATUS_URL = "https://swexpertacademy.com/main/talk/solvingClub/problemBoxSubmitStatusList.do"
 DEFAULT_AUTH_FILE = Path(__file__).parent / "swea_auth.json"
-DEFAULT_ROSTER_FILE = Path(__file__).parent / "roster.json"
+DEFAULT_ROSTER_FILE = _app_dir() / "roster.json"
 PAGE_SIZE = 30
 MAX_PAGES = 50
 NICKNAME_SUFFIX_RE = re.compile(r"_[A-Za-z]*\d+$")

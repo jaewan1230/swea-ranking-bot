@@ -45,14 +45,7 @@ https://swexpertacademy.com/main/talk/solvingClub/problemBoxSubmitStatusList.do?
 
 GUI의 로그인 세션과 최근 입력값은 저장소 폴더가 아니라 `%APPDATA%\swea-ranking-bot`에 저장된다.
 
-선택으로 `%APPDATA%\swea-ranking-bot\roster.json`에 닉네임별 지역을 적어두면 표의 이름 열을 `이름 (지역)`으로 표시한다.
-
-```json
-{
-  "user_a": "광주",
-  "user_b": "서울"
-}
-```
+roster(닉네임→지역 매핑)는 GUI/CLI 공통으로 같은 파일을 본다 — 스크립트로 실행하면 이 폴더의 `roster.json`, exe로 빌드했으면 **exe 파일과 같은 폴더**의 `roster.json`. 자세한 작성법은 [표시 이름 / 지역 표기](#표시-이름--지역-표기) 참고.
 
 ## CLI 사용법
 
@@ -89,11 +82,11 @@ cp roster.example.json roster.json
 
 ## Windows exe 빌드
 
-릴리즈용 exe는 PyInstaller로 만들 수 있다. Playwright 브라우저 의존성이 있어 단일 exe보다 기본 폴더 배포를 권장한다.
+릴리즈용 exe는 PyInstaller로 만들 수 있다. Playwright 브라우저 의존성이 있어 단일 exe보다 기본 폴더 배포를 권장한다. 아래 명령은 PowerShell 기준이다.
 
 ```
 pip install pyinstaller
-python -m PyInstaller --noconfirm --clean --windowed --name "SWEA Ranking Bot" swea_ranking_gui.py
+python -m PyInstaller --noconfirm --clean --windowed --name "SWEA Ranking Bot" --add-data "$env:LOCALAPPDATA\ms-playwright;ms-playwright" swea_ranking_gui.py
 ```
 
 빌드가 끝나면 `dist/SWEA Ranking Bot/` 폴더를 zip으로 묶어 GitHub Releases에 첨부한다.
