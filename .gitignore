@@ -1,1 +1,6 @@
 swea_auth.json
+roster.json
+__pycache__/
+*.pyc
+build/
+dist/

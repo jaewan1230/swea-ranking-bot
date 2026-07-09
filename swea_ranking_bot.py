@@ -1,17 +1,46 @@
 import argparse
+import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import Callable
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import sync_playwright
 
-if sys.stdout.encoding.lower() != "utf-8":
+if sys.stdout and sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
 SUBMIT_STATUS_URL = "https://swexpertacademy.com/main/talk/solvingClub/problemBoxSubmitStatusList.do"
 DEFAULT_AUTH_FILE = Path(__file__).parent / "swea_auth.json"
+DEFAULT_ROSTER_FILE = Path(__file__).parent / "roster.json"
 PAGE_SIZE = 30
 MAX_PAGES = 50
+NICKNAME_SUFFIX_RE = re.compile(r"_[A-Za-z]*\d+$")
+
+
+def clean_display_name(nickname: str) -> str:
+    return NICKNAME_SUFFIX_RE.sub("", nickname)
+
+
+def load_roster(roster_path: Path) -> dict[str, str]:
+    if not roster_path.exists():
+        return {}
+    with roster_path.open(encoding="utf-8") as f:
+        return json.load(f)
+
+
+def parse_swea_ids(url: str) -> tuple[str, str]:
+    query_text = urlparse(url.strip()).query or url.strip()
+    query = parse_qs(query_text)
+    solveclub_id = query.get("solveclubId", [""])[0]
+    prob_box_id = query.get("probBoxId", [""])[0]
+
+    if not solveclub_id or not prob_box_id:
+        raise ValueError("URL에서 solveclubId/probBoxId를 찾지 못했습니다.")
+
+    return solveclub_id, prob_box_id
 
 
 def save_login_session(auth_path: Path) -> None:
@@ -26,8 +55,17 @@ def save_login_session(auth_path: Path) -> None:
     print(f"로그인 세션 저장됨: {auth_path}")
 
 
-def collect_pass_counts(solveclub_id: str, prob_box_id: str, auth_path: Path) -> dict[str, set[str]]:
+def collect_pass_counts(
+    solveclub_id: str,
+    prob_box_id: str,
+    auth_path: Path,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, set[str]]:
     passed = defaultdict(set)
+
+    def report(message: str) -> None:
+        if progress_callback:
+            progress_callback(message)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -37,6 +75,7 @@ def collect_pass_counts(solveclub_id: str, prob_box_id: str, auth_path: Path) ->
 
         for left_page in range(1, MAX_PAGES + 1):
             url = f"{SUBMIT_STATUS_URL}?solveclubId={solveclub_id}&probBoxId={prob_box_id}&leftPage={left_page}"
+            report(f"{left_page}페이지 읽는 중...")
             page.goto(url)
             page.select_option("select", str(PAGE_SIZE))
             page.wait_for_load_state("networkidle")
@@ -46,6 +85,7 @@ def collect_pass_counts(solveclub_id: str, prob_box_id: str, auth_path: Path) ->
             if row_count == 0:
                 break
 
+            report(f"{left_page}페이지 멤버 {row_count}명 처리 중...")
             for i in range(row_count):
                 row = rows.nth(i)
                 nickname = row.locator(".inner_list_left .name").text_content().strip()
@@ -70,12 +110,14 @@ def collect_pass_counts(solveclub_id: str, prob_box_id: str, auth_path: Path) ->
     return passed
 
 
-def format_ranking_table(passed: dict[str, set[str]], top_n: int = 3) -> str:
+def format_ranking_table(passed: dict[str, set[str]], roster: dict[str, str] | None = None, top_n: int = 3) -> str:
+    roster = roster or {}
     ranking = sorted(passed.items(), key=lambda kv: (-len(kv[1]), kv[0]))
     medals = ["🥇 1위", "🥈 2위", "🥉 3위"]
+    header = "이름 (지역)" if roster else "이름"
 
     lines = [
-        "| **순위** | **이름** | **푼 문제 수** |",
+        f"| **순위** | **{header}** | **푼 문제 수** |",
         "|:-----|:---------|---------:|",
     ]
 
@@ -88,7 +130,11 @@ def format_ranking_table(passed: dict[str, set[str]], top_n: int = 3) -> str:
             break
         prev_count = len(problems)
         label = medals[rank - 1] if rank <= len(medals) else f"{rank}위"
-        lines.append(f"| **{label}** | {nickname} | {len(problems)} |")
+        display_name = clean_display_name(nickname)
+        region = roster.get(nickname)
+        if region:
+            display_name = f"{display_name} ({region})"
+        lines.append(f"| **{label}** | {display_name} | {len(problems)} |")
 
     return "\n".join(lines)
 
@@ -100,6 +146,7 @@ if __name__ == "__main__":
     parser.add_argument("--prob-box-id", help="집계할 Problem Box ID")
     parser.add_argument("--nickname", help="특정 닉네임만 집계 (테스트용)")
     parser.add_argument("--auth-file", default=str(DEFAULT_AUTH_FILE))
+    parser.add_argument("--roster-file", default=str(DEFAULT_ROSTER_FILE), help="닉네임→지역 매핑 JSON (선택, 없으면 이름만 표시)")
     args = parser.parse_args()
 
     auth_path = Path(args.auth_file)
@@ -114,6 +161,7 @@ if __name__ == "__main__":
         passed = collect_pass_counts(args.solveclub_id, args.prob_box_id, auth_path)
         if args.nickname:
             count = len(passed.get(args.nickname, set()))
-            print(f"{args.nickname}: Pass {count}개")
+            print(f"{clean_display_name(args.nickname)}: Pass {count}개")
         else:
-            print(format_ranking_table(passed))
+            roster = load_roster(Path(args.roster_file))
+            print(format_ranking_table(passed, roster))
